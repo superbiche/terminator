@@ -477,7 +477,13 @@ class Paned(Container):
         if self.get_toplevel().set_pos_by_ratio:
             self.set_position_by_ratio()
         else:
-            self.set_position(self.get_position())
+            newratio = self.ratio_by_position(
+                self.get_length(),
+                self.get_handlesize(),
+                self.get_position()
+            )
+            if newratio is not None:
+                self.ratio = newratio
     
     def position_by_ratio(self, total_size, handle_size, ratio):
         non_separator_size = max(total_size - handle_size, 0)
