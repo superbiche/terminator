@@ -11,6 +11,13 @@
 
 ## Python
 /.eggs
+/.pytest_cache
+/.venv
+/bin
+/include
+/lib
+/lib64
+/pyvenv.cfg
 *.pyc
 *.egg-info
 /build
@@ -19,8 +26,10 @@ remotinatorc
 terminatorlib/meliae
 /dist
 /MANIFEST
+/install-files.txt
 
 ## language / intltool related files
 .intltool*
 data/terminator.appdata.xml
 data/terminator.desktop
+data/terminator.metainfo.xml
