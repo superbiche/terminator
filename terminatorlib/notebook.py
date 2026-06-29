@@ -16,6 +16,8 @@ from .editablelabel import EditableLabel
 from .translation import _
 from .util import err, dbg, enumerate_descendants, make_uuid
 
+DND_THRESHOLD_MULTIPLIER = 4
+
 class Notebook(Container, Gtk.Notebook):
     """Class implementing a Gtk.Notebook container"""
     window = None
@@ -38,6 +40,10 @@ class Notebook(Container, Gtk.Notebook):
         self.connect('switch-page', self.deferred_on_tab_switch)
         self.connect('scroll-event', self.on_scroll_event)
         self.connect('create-window', self.create_window_detach)
+        self.connect('button-press-event', self.on_tab_drag_button_press)
+        self.connect('motion-notify-event', self.on_tab_drag_motion)
+        self.connect('button-release-event', self.on_tab_drag_button_release)
+        self._tab_detach_drag = None
         self.configure()
 
         self.set_can_focus(False)
@@ -69,6 +75,8 @@ class Notebook(Container, Gtk.Notebook):
             self.set_tab_pos(pos)
 
         for tab in range(0, self.get_n_pages()):
+            child = self.get_nth_page(tab)
+            self.configure_tab_drag(child)
             label = self.get_tab_label(self.get_nth_page(tab))
             label.update_angle()
 
@@ -77,6 +85,266 @@ class Notebook(Container, Gtk.Notebook):
 #        style.ythickness = 0
 #        self.modify_style(style)
         self.last_active_term = {}
+
+    def configure_tab_drag(self, widget):
+        """Apply Terminator's tab drag policy to a notebook page."""
+        # GTK 3.24.52 can crash in gtk_notebook_drag_end() after an
+        # aborted native detachable-tab drag. Keep GTK's stable reordering
+        # path, but implement detach-to-window in Terminator below.
+        self.set_tab_detachable(widget, False)
+        self.set_tab_reorderable(widget, True)
+
+    def on_tab_drag_button_press(self, notebook, event):
+        """Track possible tab detach gestures before GTK handles reorder."""
+        if event.type != Gdk.EventType.BUTTON_PRESS:
+            return False
+
+        if event.button != Gdk.BUTTON_PRIMARY or not self.config['detachable_tabs']:
+            self._tab_detach_drag = None
+            return False
+
+        root_x, root_y = self.event_root_coords(event)
+        if root_x is None or root_y is None:
+            return False
+
+        child = self.tab_child_for_event(event)
+        if not child:
+            child = self.tab_child_at_root(root_x, root_y)
+        if not child:
+            self._tab_detach_drag = None
+            return False
+
+        self._tab_detach_drag = {'child': child,
+                                 'root_x': root_x,
+                                 'root_y': root_y,
+                                 'mode': None}
+        return False
+
+    def on_tab_drag_motion(self, notebook, event):
+        """Detach tabs without entering GTK's native detachable DND state."""
+        drag = self._tab_detach_drag
+        if not drag:
+            return False
+
+        if not self.config['detachable_tabs']:
+            self._tab_detach_drag = None
+            return False
+
+        if not event.state & Gdk.ModifierType.BUTTON1_MASK:
+            self._tab_detach_drag = None
+            return False
+
+        child = drag['child']
+        if self.page_num(child) == -1:
+            self._tab_detach_drag = None
+            return False
+
+        root_x, root_y = self.event_root_coords(event)
+        if root_x is None or root_y is None:
+            return False
+
+        threshold = self.get_tab_dnd_threshold()
+        dx = root_x - drag['root_x']
+        dy = root_y - drag['root_y']
+
+        if self.get_tab_pos() in [Gtk.PositionType.LEFT, Gtk.PositionType.RIGHT]:
+            cross_axis = abs(dx)
+            along_axis = abs(dy)
+        else:
+            cross_axis = abs(dy)
+            along_axis = abs(dx)
+
+        if drag['mode'] == 'reorder':
+            return False
+
+        if drag['mode'] is None:
+            if along_axis > threshold and along_axis > cross_axis:
+                drag['mode'] = 'reorder'
+                return False
+            if cross_axis <= threshold or cross_axis < along_axis:
+                return False
+            drag['mode'] = 'detach'
+
+        if self.pointer_outside_tab_header(root_x, root_y,
+                                           threshold * DND_THRESHOLD_MULTIPLIER):
+            self._tab_detach_drag = None
+            self.detach_tab_to_window(child, root_x, root_y)
+            return True
+
+        return True
+
+    def on_tab_drag_button_release(self, notebook, event):
+        """Clear custom detach gesture tracking."""
+        self._tab_detach_drag = None
+        return False
+
+    def tab_child_for_event(self, event):
+        """Return the page child for an event that started on a tab label."""
+        event_widget = Gtk.get_event_widget(event)
+        if not event_widget:
+            return None
+
+        for page in range(0, self.get_n_pages()):
+            child = self.get_nth_page(page)
+            label = self.get_tab_label(child)
+            if not label:
+                continue
+
+            close_button = getattr(label, 'button', None)
+            if close_button and self.widget_contains(close_button, event_widget):
+                return None
+
+            if self.widget_contains(label, event_widget):
+                return child
+
+        return None
+
+    def widget_contains(self, parent, widget):
+        """Return True if widget is parent or a descendant of parent."""
+        try:
+            return parent == widget or parent.is_ancestor(widget)
+        except RuntimeError:
+            return False
+
+    def tab_child_at_root(self, root_x, root_y):
+        """Return the page child under root-window coordinates."""
+        pointer = self.root_to_notebook_coords(root_x, root_y)
+        if pointer is None:
+            return None
+
+        x, y = pointer
+        for page in range(0, self.get_n_pages()):
+            child = self.get_nth_page(page)
+            label = self.get_tab_label(child)
+            bounds = self.widget_bounds_in_notebook(label)
+            if bounds is None:
+                continue
+
+            left, top, right, bottom = bounds
+            if x >= left and x <= right and y >= top and y <= bottom:
+                return child
+
+        return None
+
+    def event_root_coords(self, event):
+        """Return root-window event coordinates, if available."""
+        try:
+            return event.x_root, event.y_root
+        except AttributeError:
+            pass
+
+        try:
+            return event.get_root_coords()
+        except AttributeError:
+            return None, None
+
+    def get_tab_dnd_threshold(self):
+        """Return GTK's configured DND drag threshold."""
+        try:
+            settings = Gtk.Settings.get_default()
+            if settings:
+                threshold = settings.get_property('gtk-dnd-drag-threshold')
+                if threshold:
+                    return threshold
+        except TypeError:
+            pass
+        return 8
+
+    def pointer_outside_tab_header(self, root_x, root_y, margin):
+        """Return True once the pointer leaves the tab header by margin."""
+        pointer = self.root_to_notebook_coords(root_x, root_y)
+        bounds = self.tab_header_bounds()
+        if pointer is None or bounds is None:
+            return False
+
+        x, y = pointer
+        left, top, right, bottom = bounds
+        allocation = self.get_allocation()
+
+        if self.get_tab_pos() in [Gtk.PositionType.LEFT, Gtk.PositionType.RIGHT]:
+            top = 0
+            bottom = max(bottom, allocation.height)
+        else:
+            left = 0
+            right = max(right, allocation.width)
+
+        return (x < left - margin or x > right + margin or
+                y < top - margin or y > bottom + margin)
+
+    def root_to_notebook_coords(self, root_x, root_y):
+        """Translate root-window coordinates into notebook coordinates."""
+        window = self.get_window()
+        if window is None:
+            return None
+
+        origin = window.get_origin()
+        if len(origin) == 3:
+            origin_x = origin[1]
+            origin_y = origin[2]
+        else:
+            origin_x, origin_y = origin
+
+        x = root_x - origin_x
+        y = root_y - origin_y
+
+        try:
+            if not self.get_has_window():
+                allocation = self.get_allocation()
+                x -= allocation.x
+                y -= allocation.y
+        except AttributeError:
+            pass
+
+        return x, y
+
+    def tab_header_bounds(self):
+        """Return bounds covering visible tab labels in notebook coordinates."""
+        bounds = None
+
+        for page in range(0, self.get_n_pages()):
+            child = self.get_nth_page(page)
+            label = self.get_tab_label(child)
+            label_bounds = self.widget_bounds_in_notebook(label)
+            if label_bounds is None:
+                continue
+
+            if bounds is None:
+                bounds = label_bounds
+            else:
+                bounds = (min(bounds[0], label_bounds[0]),
+                          min(bounds[1], label_bounds[1]),
+                          max(bounds[2], label_bounds[2]),
+                          max(bounds[3], label_bounds[3]))
+
+        return bounds
+
+    def widget_bounds_in_notebook(self, widget):
+        """Return widget bounds in notebook coordinates, if allocated."""
+        if not widget or not widget.get_visible():
+            return None
+
+        try:
+            translated = widget.translate_coordinates(self, 0, 0)
+        except RuntimeError:
+            return None
+
+        if translated is None:
+            return None
+
+        x, y = translated
+        allocation = widget.get_allocation()
+        if allocation.width <= 0 or allocation.height <= 0:
+            return None
+
+        return (x, y, x + allocation.width, y + allocation.height)
+
+    def detach_tab_to_window(self, widget, root_x, root_y):
+        """Detach a tab into a new Terminator window."""
+        if self.page_num(widget) == -1:
+            return
+
+        dbg('detaching tab with Terminator-managed drag: %s' % widget)
+        self.create_window_detach(self, widget, int(root_x), int(root_y))
 
     def create_window_detach(self, notebook, widget, x, y):
         """Create a window to contain a detached tab"""
@@ -191,10 +459,9 @@ class Notebook(Container, Gtk.Notebook):
             sibling.force_set_profile(None, widget.get_profile())
 
         self.insert_page(container, None, page_num)
-        self.set_tab_detachable(container, self.config['detachable_tabs'])
         self.child_set_property(container, 'tab-expand', True)
         self.child_set_property(container, 'tab-fill', True)
-        self.set_tab_reorderable(container, True)
+        self.configure_tab_drag(container)
         self.set_tab_label(container, label)
         self.show_all()
 
@@ -322,7 +589,7 @@ class Notebook(Container, Gtk.Notebook):
 
         dbg('inserting page at position: %s' % tabpos)
         self.insert_page(widget, None, tabpos)
-        self.set_tab_detachable(widget, self.config['detachable_tabs'])
+        self.configure_tab_drag(widget)
 
         if maker.isinstance(widget, 'Terminal'):
             containers, objects = ([], [widget])
@@ -339,7 +606,6 @@ class Notebook(Container, Gtk.Notebook):
         self.child_set_property(widget, 'tab-expand', True)
         self.child_set_property(widget, 'tab-fill', True)
 
-        self.set_tab_reorderable(widget, True)
         self.set_current_page(tabpos)
         self.show_all()
         if maker.isinstance(term_widget, 'Terminal'):
