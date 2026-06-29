@@ -1,5 +1,58 @@
 # Progress
 
+## 2026-06-29 GTK notebook detachable-tab crash mitigation
+
+### Current branch state
+
+- Working branch: `superbiche/local-detachable-tabs-fix`
+- Base branch: `superbiche/daily-stable`
+- Goal: keep detachable tabs usable while avoiding the GTK 3.24.52 crash seen after an aborted native detachable-tab drag.
+
+### Crash finding
+
+- Terminator crashed on 2026-06-29 at 09:50:28 CEST.
+- Command in coredump:
+  - `/usr/bin/python3 /home/michel/.local/bin/terminator --toggle-visibility`
+- Signal:
+  - `SIGSEGV`
+- GTK stack resolved with debuginfo:
+  - `gtk_notebook_drag_end()` at `gtknotebook.c:3743`
+  - crashing line dereferenced `priv->dnd_window` after GTK had already reached a drag-abort timeout path.
+- Relevant private GTK state at crash:
+  - `priv->dnd_window = 0x0`
+  - `priv->detached_tab` was non-null
+  - `priv->operation = DRAG_OPERATION_NONE`
+- The user was not actively dragging at the exact crash moment, but had dragged tabs shortly before; this matches GTK's delayed drag-abort timeout path.
+
+### Local fix
+
+- `terminatorlib/notebook.py` now keeps GTK tab reordering enabled but disables GTK's native detachable-tab DND state per page:
+  - `set_tab_detachable(page, False)`
+  - `set_tab_reorderable(page, True)`
+- Terminator implements detach-to-new-window itself by tracking tab-label button press, motion, and release events.
+- The current user-facing tradeoff:
+  - left/right tab movement works
+  - dragging tiles inside a tab is more stable and no longer flickers as much
+  - dragging a tab top/down can eagerly detach it into a new window
+  - the detached window's tile can still be moved back into another tab, so this is acceptable as a local daily-driver fix
+
+### Upstream options
+
+1. Detach only once the pointer leaves the whole Terminator window or notebook area, rather than leaving the tab header band.
+2. Prefer this if upstreaming: enter a custom detach-intent mode on cross-axis tab drag, but create the new window only on button release outside the source notebook/window. Releasing back inside should cancel cleanly. This best matches GTK's native feel while avoiding GTK's native detachable-tab DND crash path.
+3. Preserve GTK native reorder exactly while replacing only the native detach path. This is ideal behaviorally, but may be harder to prove safe because GTK private notebook drag state is not available from PyGObject.
+
+### Verification and artifacts
+
+- Worker handoff:
+  - `/tmp/codex-judge-handoffs/2026-06-29-100624-terminator-codex.md`
+- External review artifact:
+  - `/var/tmp/terminator-sibling-fix-external-review-2026-06-29.md`
+- Review verdict:
+  - no blocking findings for local use
+  - residual upstream risk is the eager top/down detach behavior documented above
+- User installed and tested the patch locally on 2026-06-29.
+
 ## 2026-06-11 Terminator crash investigation and fork strategy
 
 ### Current branch state
