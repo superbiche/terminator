@@ -1,5 +1,67 @@
 # Progress
 
+## 2026-09-02 Save-session-on-window-close option
+
+### Goal
+
+- Closing a whole Terminator window offers one prompt with
+  Cancel / Close / Save Layout and Close; saving persists the full layout
+  (tabs, splits, per-terminal cwd) and the next plain launch restores it.
+
+### Implementation
+
+- New global config keys (DEFAULTS in `terminatorlib/config.py`):
+  `prompt_save_on_close` (default False, enables the prompt) and
+  `restore_session` (sticky flag: set by Save, cleared by an explicit
+  no-save Close; survives crashes so a killed session still restores).
+- `terminatorlib/util.py`: `SAVED_SESSION_LAYOUT = 'SavedSession'` — the
+  reserved layout key holding the snapshot.
+- `terminatorlib/container.py`: `construct_confirm_close` gained
+  `save_on_close`; it forces the dialog up (independent of
+  `ask_before_closing = never`), adds the Save button
+  (response `Gtk.ResponseType.OK`), window-oriented wording, and hides the
+  "do not show again" checkbox.
+- `terminatorlib/window.py`: `on_delete_event` passes `save_on_close` from
+  the option, handles OK (save then close) and ACCEPT-with-option-on
+  (discard: clears `restore_session`); new `save_session_layout()` snapshots
+  `Terminator.describe_layout(save_cwd=True)` into the reserved key.
+- `terminatorlib/optionparse.py`: extracted `select_startup_layout()` —
+  plain launches resolve to `SavedSession` when the flag is set; an
+  explicit `-l` or `-s` always wins.
+- Multi-window semantics (as designed): the snapshot always captures the
+  whole app (all open windows), taken while the closing window still
+  exists, so a restore brings back everything open at save time.
+- Reuses existing machinery end to end: `describe_layout` /
+  `create_layout` already round-trip `directory` per terminal
+  (`terminal.py` `describe_layout` writes it, `create_layout` reads it).
+- Known upstream bug hit while smokesaving without CLI options:
+  `ConfigBase.save()` dereferences `self.command_line_options.config`
+  without a None guard (config.py ~858); the app always has options set,
+  library embedders must too. Not fixed here (out of scope).
+
+### Verification
+
+- `python3 -m pytest tests/test_session_save_on_close.py` — 12 passed
+  (startup-layout resolution, snapshot replace/add/empty paths, all three
+  dialog responses, save-option-off).
+- `python3 -m pytest tests` — 35 passed, 4 failed (pre-existing
+  keybinding failures documented above).
+- `python3 -m compileall -q terminatorlib` and `git diff --check` clean.
+- Runtime smoke (`tmp/smoke_session_save.py`, real Window on Wayland, temp
+  config `prompt_save_on_close = true` + `ask_before_closing = never`,
+  stubbed `Gtk.Dialog.run` returning Save): 3-button dialog offered, close
+  allowed after save, `[[SavedSession]]` persisted under `[layouts]` with
+  `directory = /tmp` (fed `cd /tmp`), `restore_session = True` written,
+  real-Config `select_startup_layout` resolves to `SavedSession` — PASS.
+  Evidence: `tmp/smoke_session_save.out`.
+
+### To enable
+
+```
+[global_config]
+  prompt_save_on_close = true
+```
+
 ## 2026-09-02 Forced confirmation when closing a tab with a running session
 
 ### Goal

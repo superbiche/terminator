@@ -279,17 +279,43 @@ class Window(Container, Gtk.Window):
         return self.get_child().newtab(debugtab, cwd=cwd, profile=profile)
 
     def on_delete_event(self, window, event, data=None):
-        """Handle a window close request"""
+        """Handle window close request"""
         maker = Factory()
 
         child = self.get_child()
         if (maker.isinstance(child, 'Terminal') or
             maker.isinstance(child, 'Container')):
-            confirm_close = self.construct_confirm_close(window, child)
+            confirm_close = self.construct_confirm_close(
+                window, child,
+                save_on_close=self.config['prompt_save_on_close'])
+            if confirm_close == Gtk.ResponseType.OK:
+                self.save_session_layout()
+                return False # close anyway, session was saved
+            if confirm_close == Gtk.ResponseType.ACCEPT and \
+                    self.config['prompt_save_on_close'] and \
+                    self.config['restore_session']:
+                # explicit discard: a saved session must not come back
+                self.config['restore_session'] = False
+                self.config.save()
             return (confirm_close != Gtk.ResponseType.ACCEPT)
         else:
             dbg('unknown child: %s' % child)
             return False # close anyway
+
+    def save_session_layout(self):
+        """Snapshot the full app layout (with each terminal's cwd) into a
+        reserved layout key and flag it for restore on next start"""
+        layout = self.terminator.describe_layout(save_cwd=True)
+        if not layout:
+            err('save_session_layout: empty layout, nothing saved')
+            return False
+        if not self.config.replace_layout(util.SAVED_SESSION_LAYOUT, layout):
+            self.config.add_layout(util.SAVED_SESSION_LAYOUT, layout)
+        self.config['restore_session'] = True
+        self.config.save()
+        dbg('save_session_layout: saved session layout (%d objects)' %
+            len(layout))
+        return True
 
     def on_destroy_event(self, widget, data=None):
         """Handle window destruction"""

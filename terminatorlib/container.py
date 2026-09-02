@@ -152,12 +152,17 @@ class Container(object):
         """Unzoom a terminal"""
         raise NotImplementedError('unzoom')
 
-    def construct_confirm_close(self, window, child, force_confirm=False):
+    def construct_confirm_close(self, window, child, force_confirm=False,
+                                save_on_close=False):
         """Create a confirmation dialog for closing things.
 
         force_confirm keeps the dialog up even when the configuration
         would skip it (ask_before_closing never / multiple_terminals) —
         used when a running session would be killed by the close.
+
+        save_on_close adds a 'Save Layout and Close' button (response
+        OK) offering to persist the session layout; it also forces the
+        dialog up, since the prompt is about saving, not just confirming.
         """
         maker = Factory()
 
@@ -168,7 +173,8 @@ class Container(object):
             has_multiple_terms = self.is_zoomed()
 
         # skip this dialog if applicable, unless something is still running
-        if not force_confirm:
+        # or a save option is being offered
+        if not force_confirm and not save_on_close:
             if self.config['ask_before_closing'] == 'never':
                 return Gtk.ResponseType.ACCEPT
             elif self.config['ask_before_closing'] == 'multiple_terminals':
@@ -199,11 +205,19 @@ the tab will also close all terminals within it.')
         else:
             description_text = ''
 
+        if save_on_close:
+            big_label_text = _('Close this window?')
+            description_text = _('Closing this window will lose the current \
+tabs, splits and directories. Save them to restore the same session next \
+time Terminator starts?')
+
         # dialog GUI
         dialog = Gtk.Dialog(_('Close?'), window, Gtk.DialogFlags.MODAL)
         dialog.set_resizable(False)
     
         dialog.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.REJECT)
+        if save_on_close:
+            dialog.add_button(_('Save Layout and _Close'), Gtk.ResponseType.OK)
         c_all = dialog.add_button(Gtk.STOCK_CLOSE, Gtk.ResponseType.ACCEPT)
         c_all.get_children()[0].get_children()[0].get_children()[1].set_label(
                 confirm_button_text)
@@ -229,7 +243,7 @@ the tab will also close all terminals within it.')
         dialog.vbox.pack_start(box, False, False, 12)
 
         checkbox = None
-        if not force_confirm:
+        if not force_confirm and not save_on_close:
             # Offering 'never' would disarm the running-session guard, so the
             # checkbox only appears on the ordinary confirm-close dialog.
             checkbox = Gtk.CheckButton(_("Do not show this message next time"))

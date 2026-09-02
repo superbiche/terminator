@@ -33,6 +33,20 @@ class ExecuteCallback(argparse.Action):
         """Callback for use in parsing execute options"""
         setattr(namespace, self.dest, values)
 
+def select_startup_layout(options, configobj, explicit_layout):
+    """Decide which layout this start should use.
+
+    A session saved via the save-on-close prompt (restore_session flag)
+    takes over plain launches only: an explicit -l or -s always wins.
+    """
+    if not options.select and not explicit_layout and \
+            configobj['restore_session'] and \
+            util.SAVED_SESSION_LAYOUT in configobj.list_layouts():
+        dbg('OptionParse:: restoring saved session layout')
+        return util.SAVED_SESSION_LAYOUT
+    return options.layout
+
+
 def parse_options():
     """Parse the command line options"""
     is_x_terminal_emulator = os.path.basename(sys.argv[0]) == 'x-terminal-emulator'
@@ -155,10 +169,13 @@ icon for the window (by file or name)'))
                     options.working_directory)
             options.working_directory = ''
 
+    explicit_layout = options.layout is not None
     if options.layout is None:
         options.layout = 'default'
 
     configobj = config.Config()
+    options.layout = select_startup_layout(options, configobj, explicit_layout)
+
     if options.profile and options.profile not in configobj.list_profiles():
         options.profile = None
 

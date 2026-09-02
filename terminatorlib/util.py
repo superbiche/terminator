@@ -36,6 +36,11 @@ except ImportError:
 
 # set this to true to enable debugging output
 DEBUG = False
+
+# Reserved layout key holding the session snapshot written by the
+# save-on-window-close prompt (and read back at startup when the
+# restore_session global config flag is set).
+SAVED_SESSION_LAYOUT = 'SavedSession'
 # set this to true to additionally list filenames in debugging
 DEBUGFILES = False
 # list of classes to show debugging for. empty list means show all classes

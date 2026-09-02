@@ -106,6 +106,8 @@ DEFAULTS = {
                                        'LaunchpadCodeURLHandler',
                                        'APTURLHandler'],
             'ask_before_closing'    : 'multiple_terminals',
+            'prompt_save_on_close'  : False,
+            'restore_session'       : False,
             'always_split_with_profile': False,
             'putty_paste_style'     : False,
             'putty_paste_style_source_clipboard': False,
