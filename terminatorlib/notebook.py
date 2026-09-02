@@ -641,7 +641,16 @@ class Notebook(Container, Gtk.Notebook):
         maker = Factory()
         child = nb.get_nth_page(tabnum)
 
-        confirm_close = self.construct_confirm_close(self.window, child)
+        running_sessions = False
+        if maker.isinstance(child, 'Terminal'):
+            running_sessions = child.has_running_session()
+        elif maker.isinstance(child, 'Container'):
+            _, childterminals = enumerate_descendants(child)
+            running_sessions = any(term.has_running_session()
+                                   for term in childterminals)
+
+        confirm_close = self.construct_confirm_close(self.window, child,
+                                                     force_confirm=running_sessions)
         if confirm_close != Gtk.ResponseType.ACCEPT:
             dbg('user cancelled request')
             return

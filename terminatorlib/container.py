@@ -152,8 +152,13 @@ class Container(object):
         """Unzoom a terminal"""
         raise NotImplementedError('unzoom')
 
-    def construct_confirm_close(self, window, child):
-        """Create a confirmation dialog for closing things"""
+    def construct_confirm_close(self, window, child, force_confirm=False):
+        """Create a confirmation dialog for closing things.
+
+        force_confirm keeps the dialog up even when the configuration
+        would skip it (ask_before_closing never / multiple_terminals) —
+        used when a running session would be killed by the close.
+        """
         maker = Factory()
 
         has_multiple_terms = False
@@ -162,12 +167,13 @@ class Container(object):
         elif maker.isinstance(self, 'Window'):
             has_multiple_terms = self.is_zoomed()
 
-        # skip this dialog if applicable
-        if self.config['ask_before_closing'] == 'never':
-            return Gtk.ResponseType.ACCEPT
-        elif self.config['ask_before_closing'] == 'multiple_terminals':
-            if not has_multiple_terms:
+        # skip this dialog if applicable, unless something is still running
+        if not force_confirm:
+            if self.config['ask_before_closing'] == 'never':
                 return Gtk.ResponseType.ACCEPT
+            elif self.config['ask_before_closing'] == 'multiple_terminals':
+                if not has_multiple_terms:
+                    return Gtk.ResponseType.ACCEPT
 
         # text
         confirm_button_text = (_('Close _Terminals') if has_multiple_terms
@@ -175,7 +181,14 @@ class Container(object):
         big_label_text = (_('Close multiple terminals?') if has_multiple_terms
                           else _('Close terminal?'))
 
-        if not has_multiple_terms:
+        if force_confirm and not has_multiple_terms:
+            description_text = _('A session appears to still be running in \
+this terminal. Closing it will also kill that session.')
+        elif force_confirm:
+            description_text = _('Some of the terminals in this tab appear to \
+have running sessions. Closing the tab will also close all terminals within \
+it.')
+        elif not has_multiple_terms:
             description_text = _('Do you really wish to close this terminal?')
         elif maker.isinstance(self, 'Window'):
             description_text = _('This window has several terminals open. Closing \
@@ -215,8 +228,12 @@ the tab will also close all terminals within it.')
         box.pack_start(labels, False, False, 6)
         dialog.vbox.pack_start(box, False, False, 12)
 
-        checkbox = Gtk.CheckButton(_("Do not show this message next time"))
-        dialog.vbox.pack_end(checkbox, True, True, 0)
+        checkbox = None
+        if not force_confirm:
+            # Offering 'never' would disarm the running-session guard, so the
+            # checkbox only appears on the ordinary confirm-close dialog.
+            checkbox = Gtk.CheckButton(_("Do not show this message next time"))
+            dialog.vbox.pack_end(checkbox, True, True, 0)
     
         dialog.show_all()
 
@@ -224,7 +241,7 @@ the tab will also close all terminals within it.')
         
         # set configuration
         self.config.base.reload()
-        if checkbox.get_active():
+        if checkbox is not None and checkbox.get_active():
             self.config['ask_before_closing'] = 'never'
         self.config.save()
 

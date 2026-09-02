@@ -1,5 +1,53 @@
 # Progress
 
+## 2026-09-02 Forced confirmation when closing a tab with a running session
+
+### Goal
+
+- Accidental clicks on the tab close cross must not kill a running session,
+  even though the user's config sets `ask_before_closing = never`.
+
+### Implementation
+
+- `terminatorlib/util.py`: new `has_foreground_job(pid)` helper. VTE 0.84's
+  PyGObject binding does not expose a foreground-pid getter (verified by
+  introspection on vte2.91-0.84.1), so it reads the tty foreground process
+  group (`tpgid`, field 8 of `/proc/<pid>/stat`) and compares it against the
+  shell's own process group. Unreadable/dead pids and `tpgid == -1` report
+  False so the check can never block a close on its own.
+- `terminatorlib/terminal.py`: `Terminal.has_running_session()` delegates to
+  the helper with the shell pid.
+- `terminatorlib/notebook.py`: `closetab` computes whether the tab's child
+  (Terminal, or any Terminal under a Container) has a running session and
+  passes `force_confirm` to `construct_confirm_close`.
+- `terminatorlib/container.py`: `construct_confirm_close` gained
+  `force_confirm`; when set it skips the `never` / `multiple_terminals`
+  config short-circuits, shows running-session wording, and hides the
+  "Do not show this message next time" checkbox so the guard cannot be
+  silently disarmed.
+- Known gap: a job backgrounded with `&` keeps `tpgid` at the shell's group,
+  so it does not trigger the prompt (foreground jobs only). Keyboard
+  `close_term` (Ctrl+Shift+W) path is unchanged, per request scope (close
+  cross and tab middle-click).
+
+### Verification
+
+- `python3 -m pytest tests/test_tab_close_confirm.py` — 6 passed, including
+  a `pty.fork` integration test asserting idle shell reports False and a
+  shell running `sleep 30` reports True.
+- `python3 -m doctest terminatorlib/util.py` — 7 passed.
+- `python3 -m pytest tests` — 23 passed, 4 failed (pre-existing
+  `test_prefseditor_keybindings.py` py3.14/GTK failures documented above).
+- `python3 -m compileall -q terminatorlib` and `git diff --check` clean.
+- Runtime smoke (`tmp/smoke_tab_confirm.py`, real Window/Notebook/Terminal
+  on Wayland, temp config with `ask_before_closing = never`, `Gtk.Dialog.run`
+  stubbed): idle-before False, running-detect True, dialog shown despite
+  `never`, tab survives cancel, idle after job kill — SMOKE PASS.
+  - Side finding: the smoke surfaced a pre-existing upstream bug —
+    `ConfigBase.save()` dereferences `self.command_line_options.config`
+    without a None guard (config.py ~line 854). The exception is caught and
+    printed; only reachable when saving config without CLI options loaded.
+
 ## 2026-06-29 GTK notebook detachable-tab crash mitigation
 
 ### Current branch state

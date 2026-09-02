@@ -300,6 +300,50 @@ def get_nav_tiebreak(direction, cursor_x, cursor_y, rect):
     else:
         raise ValueError('Unknown direction: %s' % direction)
 
+def has_foreground_job(pid):
+    """Return True if the shell at pid has a foreground job running.
+
+    VTE 0.84's introspection binding does not expose a foreground-pid
+    getter, so we read the tty's foreground process group (tpgid) from
+    /proc/<pid>/stat: an idle shell owns its own foreground process
+    group, while a running command moves tpgid to the job's group.
+    Terminals without a controlling tty (tpgid -1), dead or unreadable
+    pids report False so this check can never block a close on its own.
+
+>>> has_foreground_job(os.getpid())
+False
+>>> has_foreground_job(1)
+False
+>>> has_foreground_job(999999)
+False
+>>> has_foreground_job(None)
+False
+"""
+    if pid is None or pid <= 0:
+        return False
+    try:
+        with open('/proc/%d/stat' % pid, 'r') as statfile:
+            statline = statfile.read()
+    except (IOError, OSError):
+        return False
+    # The comm field is parenthesized and may contain spaces and
+    # parentheses, so split the fields off after the LAST ')'.
+    tail = statline.rsplit(')', 1)
+    if len(tail) != 2:
+        return False
+    fields = tail[1].split()
+    # Fields following comm: state ppid pgrp session tty_nr tpgid ...
+    if len(fields) < 6:
+        return False
+    try:
+        pgrp = int(fields[2])
+        tpgid = int(fields[5])
+    except ValueError:
+        return False
+    if tpgid == -1:
+        return False
+    return tpgid != pgrp
+
 def enumerate_descendants(parent):
     """Walk all our children and build up a list of containers and
     terminals"""

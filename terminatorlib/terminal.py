@@ -266,6 +266,10 @@ class Terminal(Gtk.VBox):
         dbg('calling get_pid_cwd')
         return(get_pid_cwd(self.pid))
 
+    def has_running_session(self):
+        """True when a foreground job, not the idle shell, owns this terminal"""
+        return util.has_foreground_job(self.pid)
+
     def close(self):
         """Close ourselves"""
         dbg('close: called')
